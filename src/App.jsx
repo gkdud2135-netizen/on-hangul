@@ -34,7 +34,28 @@ function jamoSoundByRegion(jamo, region) {
   return JUNG_SOUND[jamo] ?? "";
 }
 
-function speak(text, rate = 0.8) {
+const VOICE_PROFILES = {
+  adultFemale: { label: "여자 성인", pitch: 1.05, rate: 0.85 },
+  adultMale: { label: "남자 성인", pitch: 0.7, rate: 0.85 },
+  girl: { label: "여자아이", pitch: 1.55, rate: 0.95 },
+  boy: { label: "남자아이", pitch: 1.3, rate: 0.95 },
+};
+const VOICE_STORAGE_KEY = "mh-voice";
+
+function loadVoiceProfile() {
+  try {
+    const v = window.localStorage.getItem(VOICE_STORAGE_KEY);
+    if (v && VOICE_PROFILES[v]) return v;
+  } catch (e) {}
+  return "adultFemale";
+}
+function saveVoiceProfile(v) {
+  try {
+    window.localStorage.setItem(VOICE_STORAGE_KEY, v);
+  } catch (e) {}
+}
+
+function speak(text, { rate = 0.85, pitch = 1 } = {}) {
   if (!text) return;
   try {
     const synth = window.speechSynthesis;
@@ -43,6 +64,7 @@ function speak(text, rate = 0.8) {
     const u = new SpeechSynthesisUtterance(text);
     u.lang = "ko-KR";
     u.rate = rate;
+    u.pitch = pitch;
     const voices = synth.getVoices();
     const ko = voices.find((v) => v.lang && v.lang.startsWith("ko"));
     if (ko) u.voice = ko;
@@ -208,9 +230,20 @@ export default function ModuHangul() {
   const [withBlueSetting, setWithBlueSetting] = useState(true);
   const [soundOn, setSoundOn] = useState(true);
   const [ttsOn, setTtsOn] = useState(true);
+  const [voiceProfile, setVoiceProfile] = useState(loadVoiceProfile);
   const [showSettings, setShowSettings] = useState(false);
   const [round, setRound] = useState(0);
   const [wordIdx, setWordIdx] = useState(0);
+
+  const say = useCallback(
+    (text) => speak(text, VOICE_PROFILES[voiceProfile]),
+    [voiceProfile]
+  );
+  const chooseVoice = (v) => {
+    setVoiceProfile(v);
+    saveVoiceProfile(v);
+    speak("안녕하세요", VOICE_PROFILES[v]);
+  };
 
   useEffect(() => {
     setData(loadData());
@@ -231,7 +264,6 @@ export default function ModuHangul() {
   const cardRefs = useRef({});
   const dragRef = useRef(null);
   const errorsRef = useRef(0);
-  const pressTimer = useRef(null);
 
   const totalSlots = boards.reduce((s, b) => s + b.slots.length, 0);
   const boardOffsets = boards.reduce((acc, b) => {
@@ -408,10 +440,10 @@ export default function ModuHangul() {
           const sound = jamoSoundByRegion(card.jamo, expected.region);
           if (willComplete) {
             const wordText = wordInfo?.text ?? "";
-            if (sound) speak(sound + ", " + wordText);
-            else speak(wordText);
+            if (sound) say(sound + ", " + wordText);
+            else say(wordText);
           } else if (sound) {
-            speak(sound);
+            say(sound);
           } else if (soundOn) {
             playDing();
           }
@@ -443,14 +475,8 @@ export default function ModuHangul() {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
     };
-  }, [cards, soundOn, ttsOn, filledCount, totalSlots, boards, hasJamo, wordInfo, screen, recordComplete]); // eslint-disable-line
+  }, [cards, soundOn, ttsOn, filledCount, totalSlots, boards, hasJamo, wordInfo, screen, recordComplete, say]); // eslint-disable-line
 
-  const startPress = () => {
-    pressTimer.current = setTimeout(() => setShowSettings(true), 1200);
-  };
-  const cancelPress = () => {
-    if (pressTimer.current) clearTimeout(pressTimer.current);
-  };
 
   const nBoards = boards.length;
   const boardSize =
@@ -757,11 +783,8 @@ export default function ModuHangul() {
           {childName} · 스텝 {step} {STEP_INFO[step].title}
         </div>
         <button
-          onPointerDown={startPress}
-          onPointerUp={cancelPress}
-          onPointerLeave={cancelPress}
+          onClick={() => setShowSettings((v) => !v)}
           style={{ ...chip(false), opacity: 0.6 }}
-          title="길게 누르면 설정이 열려요"
         >
           ⚙
         </button>
@@ -797,6 +820,16 @@ export default function ModuHangul() {
               음가 읽기 {ttsOn ? "켬" : "끔"}
             </button>
           )}
+          {hasJamo && (
+            <div style={{ width: "100%", display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: "#8B847A" }}>목소리</span>
+              {Object.entries(VOICE_PROFILES).map(([key, p]) => (
+                <button key={key} onClick={() => chooseVoice(key)} style={chip(voiceProfile === key)}>
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          )}
           <button onClick={() => setSoundOn((v) => !v)} style={chip(soundOn)}>
             효과음 {soundOn ? "켬" : "끔"}
           </button>
@@ -824,7 +857,7 @@ export default function ModuHangul() {
                 key={w.text}
                 onClick={() => {
                   setWordIdx(i);
-                  if (ttsOn) speak(w.text);
+                  if (ttsOn) say(w.text);
                 }}
                 style={{
                   flexShrink: 0,
@@ -884,7 +917,7 @@ export default function ModuHangul() {
                 lineHeight: 1,
                 cursor: "pointer",
               }}
-              onClick={() => ttsOn && speak(wordInfo?.text ?? "")}
+              onClick={() => ttsOn && say(wordInfo?.text ?? "")}
               title="그림을 누르면 낱말을 읽어줘요"
             >
               {wordInfo?.emoji ?? ""}
@@ -1010,6 +1043,7 @@ function Shell({ children }) {
         touchAction: "none",
         userSelect: "none",
         WebkitUserSelect: "none",
+        WebkitTouchCallout: "none",
       }}
     >
       {children}
