@@ -1,10 +1,11 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 
 // ─────────────────────────────────────────────
 // 온의 언어 : 한글 v11
 // + 의미낱말 2~5음절 확장 (스텝 5: 1음절 / 6: 2음절 / 7: 3음절 / 8: 4~5음절)
 // + 이중모음(ㅘ 등)은 ㅗ·ㅏ 위치를 나눠 노랑 칸 2개로 표시
 // + 의미낱말 스텝: 그림상징 선택판 — 상징을 눌러 쓸 단어를 고름
+// + 스텝 9: 직접 입력한 단어로 연습 / 스텝 10: 단어+동사구 문장 / 스텝 11: 나의 정보
 // ─────────────────────────────────────────────
 
 const COLORS = {
@@ -78,19 +79,43 @@ function pickKoVoice(gender) {
   }
 }
 
-function speak(text, { rate = 0.85, pitch = 1, gender = "female" } = {}) {
+function makeUtterance(text, { rate = 0.85, pitch = 1, gender = "female" } = {}) {
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = "ko-KR";
+  u.rate = rate;
+  u.pitch = pitch;
+  const voice = pickKoVoice(gender);
+  if (voice) u.voice = voice;
+  return u;
+}
+
+function speak(text, opts) {
   if (!text) return;
   try {
     const synth = window.speechSynthesis;
     if (!synth) return;
     synth.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = "ko-KR";
-    u.rate = rate;
-    u.pitch = pitch;
-    const voice = pickKoVoice(gender);
-    if (voice) u.voice = voice;
-    synth.speak(u);
+    synth.speak(makeUtterance(text, opts));
+  } catch (e) {}
+}
+
+// 자모 음가 → 음절 → (단어) 를 짧은 간격을 두고 순서대로 읽는다.
+function speakSequence(texts, opts, gapMs = 150) {
+  const list = (texts || []).filter(Boolean);
+  if (!list.length) return;
+  try {
+    const synth = window.speechSynthesis;
+    if (!synth) return;
+    synth.cancel();
+    let i = 0;
+    const playNext = () => {
+      if (i >= list.length) return;
+      const u = makeUtterance(list[i++], opts);
+      u.onend = () => setTimeout(playNext, gapMs);
+      u.onerror = () => setTimeout(playNext, gapMs);
+      synth.speak(u);
+    };
+    playNext();
   } catch (e) {}
 }
 
@@ -140,6 +165,19 @@ const WORDS_45 = [
 ];
 const MEANING_POOLS = { 5: WORDS_1, 6: WORDS_2, 7: WORDS_3, 8: WORDS_45 };
 
+const VERB_PHRASES = ["주세요", "원해요", "먹고 싶어요", "가고 싶어요", "하고 싶어요", "해요"];
+
+const DIGIT_SOUND = { "0": "공", "1": "일", "2": "이", "3": "삼", "4": "사", "5": "오", "6": "육", "7": "칠", "8": "팔", "9": "구" };
+
+const MY_INFO_FIELDS = [
+  { key: "name", label: "내 이름", icon: "🙋" },
+  { key: "mom", label: "엄마 이름", icon: "👩" },
+  { key: "dad", label: "아빠 이름", icon: "👨" },
+  { key: "address", label: "우리 집 주소", icon: "🏠" },
+  { key: "phone", label: "핸드폰 번호", icon: "📱" },
+];
+const EMPTY_INFO = { name: "", mom: "", dad: "", address: "", phone: "" };
+
 const STEP_INFO = {
   1: { title: "색깔 맞추기", sub: "숫자 단서 있음" },
   2: { title: "색깔 맞추기", sub: "단서 없음" },
@@ -149,6 +187,9 @@ const STEP_INFO = {
   6: { title: "의미낱말", sub: "2음절" },
   7: { title: "의미낱말", sub: "3음절" },
   8: { title: "의미낱말", sub: "4~5음절" },
+  9: { title: "나만의 단어", sub: "직접 입력" },
+  10: { title: "문장 만들기", sub: "단어 + 동사구" },
+  11: { title: "나의 정보", sub: "이름 · 주소 · 전화" },
 };
 
 const CHO_LIST = ["ㄱ","ㄲ","ㄴ","ㄷ","ㄸ","ㄹ","ㅁ","ㅂ","ㅃ","ㅅ","ㅆ","ㅇ","ㅈ","ㅉ","ㅊ","ㅋ","ㅌ","ㅍ","ㅎ"];
@@ -160,6 +201,20 @@ function composeSyllable(cho, jung, jong) {
   const j = JUNG_LIST.indexOf(jung);
   const t = jong ? JONG_LIST.indexOf(jong) : 0;
   return String.fromCharCode(0xac00 + (c * 21 + j) * 28 + t);
+}
+
+// 완성된 한글 음절 한 글자 → [초성, 중성, (종성)] 자모 배열로 분해
+function decomposeSyllable(ch) {
+  const code = ch.codePointAt(0) - 0xac00;
+  if (code < 0 || code > 11171) return null;
+  const cho = CHO_LIST[Math.floor(code / (21 * 28))];
+  const jung = JUNG_LIST[Math.floor((code % (21 * 28)) / 28)];
+  const jongIdx = code % 28;
+  const jong = jongIdx ? JONG_LIST[jongIdx] : null;
+  return jong ? [cho, jung, jong] : [cho, jung];
+}
+function decomposeWord(word) {
+  return Array.from(word || "").map(decomposeSyllable).filter(Boolean);
 }
 
 // 음절 자모 → 슬롯 목록 (이중모음은 노랑 2칸으로 분리)
@@ -175,6 +230,23 @@ function syllToSlots(jamos) {
   }
   if (jong) slots.push({ region: "blue", jamo: jong });
   return slots;
+}
+
+// 보드(엘코닌 박스) 하나의 슬롯 → 완성된 음절 글자 (음절 단위 TTS용, 이중모음 역변환 포함)
+function boardSyllableText(b) {
+  const cho = b.slots.find((s) => s.region === "pink")?.jamo;
+  const jong = b.slots.find((s) => s.region === "blue")?.jamo || null;
+  const mid = b.slots.find((s) => s.region === "yellowMid");
+  const right = b.slots.find((s) => s.region === "yellowRight");
+  let jung;
+  if (mid && right) {
+    const entry = Object.entries(DIPH).find(([, v]) => v[0] === mid.jamo && v[1] === right.jamo);
+    jung = entry ? entry[0] : mid.jamo;
+  } else {
+    jung = b.slots.find((s) => s.region === "yellow")?.jamo;
+  }
+  if (!cho || !jung) return "";
+  return composeSyllable(cho, jung, jong);
 }
 
 function pick(arr) {
@@ -241,6 +313,20 @@ function saveData(d) {
   } catch (e) {}
 }
 
+const CUSTOM_WORDS_KEY = "mh-custom-words";
+function loadCustomWords() {
+  try {
+    const raw = window.localStorage.getItem(CUSTOM_WORDS_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {}
+  return [];
+}
+function saveCustomWords(list) {
+  try {
+    window.localStorage.setItem(CUSTOM_WORDS_KEY, JSON.stringify(list));
+  } catch (e) {}
+}
+
 export default function ModuHangul() {
   const [screen, setScreen] = useState("home");
   const [step, setStep] = useState(1);
@@ -257,8 +343,28 @@ export default function ModuHangul() {
   const [round, setRound] = useState(0);
   const [wordIdx, setWordIdx] = useState(0);
 
+  // 스텝 9: 나만의 단어
+  const [customWords, setCustomWords] = useState(loadCustomWords);
+  const [showWordManager, setShowWordManager] = useState(false);
+  const [newWordText, setNewWordText] = useState("");
+  const [newWordEmoji, setNewWordEmoji] = useState("");
+
+  // 스텝 10: 문장 만들기
+  const [verbIdx, setVerbIdx] = useState(0);
+  const [verbPlaced, setVerbPlaced] = useState(false);
+
+  // 스텝 11: 나의 정보
+  const [infoCategory, setInfoCategory] = useState("name");
+  const [partIdx, setPartIdx] = useState(0);
+  const [showInfoManager, setShowInfoManager] = useState(false);
+  const [infoForm, setInfoForm] = useState(EMPTY_INFO);
+
   const say = useCallback(
     (text) => speak(text, VOICE_PROFILES[voiceProfile]),
+    [voiceProfile]
+  );
+  const saySequence = useCallback(
+    (texts) => speakSequence(texts, VOICE_PROFILES[voiceProfile]),
     [voiceProfile]
   );
   const chooseVoice = (v) => {
@@ -299,8 +405,18 @@ export default function ModuHangul() {
   }, []);
 
   const hasJamo = step >= 3;
-  const isMeaning = step >= 5;
-  const pool = MEANING_POOLS[step] ?? null;
+  const isMeaning = step >= 5 && step <= 9;
+  const isSentence = step === 10;
+  const isMyInfo = step === 11;
+
+  const SENTENCE_POOL = useMemo(
+    () => [...WORDS_1, ...WORDS_2, ...WORDS_3, ...WORDS_45, ...customWords],
+    [customWords]
+  );
+  const pool = step === 9 ? customWords : step === 10 ? SENTENCE_POOL : MEANING_POOLS[step] ?? null;
+
+  const myInfo = data.myInfo?.[childId] ?? EMPTY_INFO;
+  const myInfoKey = `${myInfo.name}|${myInfo.mom}|${myInfo.dad}|${myInfo.address}|${myInfo.phone}`;
 
   const [boards, setBoards] = useState([]); // [{slots:[{region,jamo|null}]}]
   const [wordInfo, setWordInfo] = useState(null);
@@ -327,13 +443,52 @@ export default function ModuHangul() {
     let n = 0;
     let word = null;
 
-    if (isMeaning && pool) {
-      word = pool[wordIdx % pool.length];
-      word.sylls.forEach((jamos) => {
+    const pushSylls = (syllsArr) => {
+      syllsArr.forEach((jamos) => {
         const slots = syllToSlots(jamos);
         bs.push({ slots });
         slots.forEach((s) => all.push({ id: "c" + n++, region: s.region, jamo: s.jamo, used: false, shaking: false }));
       });
+    };
+
+    if (isMyInfo) {
+      if (infoCategory === "phone") {
+        const raw = (myInfo.phone || "").trim();
+        const groups = raw.split(/[^0-9]+/).filter(Boolean);
+        if (groups.length > 0) {
+          const group = groups[partIdx % groups.length];
+          Array.from(group).forEach((d) => {
+            bs.push({ slots: [{ region: "digit", jamo: d }] });
+            all.push({ id: "c" + n++, region: "digit", jamo: d, used: false, shaking: false });
+          });
+          word = { text: Array.from(group).map((d) => DIGIT_SOUND[d] ?? d).join(" "), emoji: null, partsCount: groups.length };
+        }
+      } else if (infoCategory === "address") {
+        const raw = (myInfo.address || "").trim();
+        const eojeols = raw.split(/\s+/).filter((w) => decomposeWord(w).length > 0);
+        if (eojeols.length > 0) {
+          const chunk = eojeols[partIdx % eojeols.length];
+          pushSylls(decomposeWord(chunk));
+          word = { text: chunk, emoji: null, partsCount: eojeols.length };
+        }
+      } else {
+        const raw = (myInfo[infoCategory] || "").trim();
+        const sylls = decomposeWord(raw);
+        if (sylls.length > 0) {
+          pushSylls(sylls);
+          word = { text: raw, emoji: null };
+        }
+      }
+    } else if (isSentence) {
+      if (pool && pool.length > 0) {
+        word = pool[wordIdx % pool.length];
+        pushSylls(word.sylls);
+      }
+    } else if (isMeaning) {
+      if (pool && pool.length > 0) {
+        word = pool[wordIdx % pool.length];
+        pushSylls(word.sylls);
+      }
     } else {
       const wb = step === 3 ? false : step === 4 ? true : withBlueSetting;
       for (let g = 0; g < boxCount; g++) {
@@ -372,12 +527,14 @@ export default function ModuHangul() {
     setCards(shuffle(all));
     setFilledCount(0);
     setDone(false);
+    setVerbIdx(0);
+    setVerbPlaced(false);
     errorsRef.current = 0;
-  }, [boxCount, hasJamo, isMeaning, pool, round, step, withBlueSetting, wordIdx]);
+  }, [boxCount, hasJamo, isMeaning, isSentence, isMyInfo, pool, round, step, withBlueSetting, wordIdx, infoCategory, partIdx, myInfoKey]); // eslint-disable-line
 
   useEffect(() => {
     if (screen === "play") setup();
-  }, [boxCount, withBlueSetting, round, step, screen, wordIdx]); // eslint-disable-line
+  }, [boxCount, withBlueSetting, round, step, screen, wordIdx, customWords, infoCategory, partIdx, myInfoKey]); // eslint-disable-line
 
   const recordComplete = useCallback(() => {
     setData((prev) => {
@@ -407,6 +564,71 @@ export default function ModuHangul() {
 
   const childName = childId === "guest" ? "게스트" : data.children.find((c) => c.id === childId)?.name ?? "게스트";
 
+  // ── 스텝 9: 나만의 단어 관리 ──
+  const addCustomWord = () => {
+    const text = newWordText.trim().replace(/\s+/g, "");
+    if (!text) return;
+    const sylls = decomposeWord(text);
+    if (sylls.length === 0) {
+      alert("완성된 한글 단어를 입력해주세요.");
+      return;
+    }
+    const entry = { text, sylls, emoji: newWordEmoji.trim() || "📝" };
+    const next = [...customWords, entry];
+    setCustomWords(next);
+    saveCustomWords(next);
+    setNewWordText("");
+    setNewWordEmoji("");
+  };
+  const removeCustomWord = (i) => {
+    const next = customWords.filter((_, idx) => idx !== i);
+    setCustomWords(next);
+    saveCustomWords(next);
+    setWordIdx(0);
+  };
+
+  // ── 스텝 11: 나의 정보 관리 (기기에만 저장, 외부 전송 없음) ──
+  const openInfoManager = () => {
+    setInfoForm({
+      name: myInfo.name || "",
+      mom: myInfo.mom || "",
+      dad: myInfo.dad || "",
+      address: myInfo.address || "",
+      phone: myInfo.phone || "",
+    });
+    setShowInfoManager(true);
+  };
+  const saveInfoForm = () => {
+    setData((prev) => {
+      const next = JSON.parse(JSON.stringify(prev));
+      if (!next.myInfo) next.myInfo = {};
+      next.myInfo[childId] = { ...infoForm };
+      saveData(next);
+      return next;
+    });
+    setShowInfoManager(false);
+    setPartIdx(0);
+  };
+  const clearMyInfo = () => {
+    setData((prev) => {
+      const next = JSON.parse(JSON.stringify(prev));
+      if (next.myInfo) delete next.myInfo[childId];
+      saveData(next);
+      return next;
+    });
+    setPartIdx(0);
+  };
+
+  // ── 스텝 10: 동사구 카드 놓기 ──
+  const placeVerb = (idx) => {
+    if (!done || verbPlaced) return;
+    setVerbIdx(idx);
+    setVerbPlaced(true);
+    const sentence = `${wordInfo?.text ?? ""} ${VERB_PHRASES[idx]}`;
+    if (ttsOn) say(sentence);
+    if (soundOn) playChord();
+  };
+
   const onPointerDown = (e, card) => {
     if (card.used || done) return;
     const el = cardRefs.current[card.id];
@@ -428,6 +650,7 @@ export default function ModuHangul() {
   };
 
   const regionAtBoard = (b, relX, relY) => {
+    if (b.slots[0]?.region === "digit") return "digit";
     const { hasBlue, hasSplit, pinkH } = boardMeta(b);
     if (hasBlue && relY >= 1 - F.blueH) return "blue";
     if (hasSplit) {
@@ -485,16 +708,28 @@ export default function ModuHangul() {
 
       if (isNext && isRightRegion && isRightJamo) {
         const willComplete = filledCount + 1 === totalSlots;
+        const board = boards[eg];
+        const isDigitBoard = board.slots[0]?.region === "digit";
+        const isSyllableEnd = ep + 1 === board.slots.length;
+
         if (hasJamo && ttsOn) {
-          const sound = jamoSoundByRegion(card.jamo, expected.region);
-          if (willComplete) {
-            const wordText = wordInfo?.text ?? "";
-            if (sound) say(sound + ", " + wordText);
-            else say(wordText);
-          } else if (sound) {
-            say(sound);
-          } else if (soundOn) {
-            playDing();
+          if (isDigitBoard) {
+            const digitWord = DIGIT_SOUND[card.jamo] ?? card.jamo;
+            if (willComplete) saySequence([digitWord, wordInfo?.text ?? ""]);
+            else say(digitWord);
+          } else {
+            const sound = jamoSoundByRegion(card.jamo, expected.region);
+            if (willComplete) {
+              const syll = boardSyllableText(board);
+              saySequence([sound, syll, wordInfo?.text ?? ""]);
+            } else if (isSyllableEnd) {
+              const syll = boardSyllableText(board);
+              saySequence([sound, syll]);
+            } else if (sound) {
+              say(sound);
+            } else if (soundOn) {
+              playDing();
+            }
           }
         } else if (soundOn) {
           playDing();
@@ -524,8 +759,7 @@ export default function ModuHangul() {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
     };
-  }, [cards, soundOn, ttsOn, filledCount, totalSlots, boards, hasJamo, wordInfo, screen, recordComplete, say]); // eslint-disable-line
-
+  }, [cards, soundOn, ttsOn, filledCount, totalSlots, boards, hasJamo, wordInfo, screen, recordComplete, say, saySequence]); // eslint-disable-line
 
   const nBoards = boards.length;
   const boardSize =
@@ -558,10 +792,50 @@ export default function ModuHangul() {
     return { left: "50%", top: `${(1 - F.blueH / 2) * 100}%` };
   };
 
-  const regionColor = (region) => (region.startsWith("yellow") ? "yellow" : region);
+  const regionColor = (region) => (region.startsWith("yellow") ? "yellow" : region === "digit" ? "blue" : region);
 
   const renderBoard = (b, g) => {
     const baseIdx = boardOffsets[g];
+
+    // 숫자 카드 보드 (스텝 11 · 핸드폰 번호): 단일 칸, 자모 구성 없음
+    if (b.slots[0]?.region === "digit") {
+      const filled = baseIdx < filledCount;
+      const isNextSlot = baseIdx === filledCount && !done;
+      return (
+        <div
+          key={g}
+          ref={(el) => (boardRefs.current[g] = el)}
+          style={{
+            position: "relative",
+            width: boardSize,
+            height: boardSize,
+            background: "#fff",
+            boxShadow: "0 2px 8px rgba(46,42,37,0.10)",
+            borderRadius: 4,
+            overflow: "hidden",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <div style={{ position: "absolute", inset: 0, background: filled ? COLORS.blue.solid : COLORS.blue.light, transition: "background 0.25s" }} />
+          <div
+            style={{
+              position: "relative",
+              fontSize: ghostFont,
+              fontWeight: 800,
+              color: filled ? INK : GHOST,
+              animation: isNextSlot ? "mh-pop 0.9s ease-in-out infinite" : "none",
+              lineHeight: 1,
+              pointerEvents: "none",
+            }}
+          >
+            {b.slots[0].jamo}
+          </div>
+        </div>
+      );
+    }
+
     const { hasBlue, hasSplit, pinkH, bottom } = boardMeta(b);
     const slotFilled = (region) => {
       const idx = b.slots.findIndex((s) => s.region === region);
@@ -693,6 +967,10 @@ export default function ModuHangul() {
     ? (wordInfo?.text ?? "") + " 완성!"
     : "참 잘했어요!";
 
+  const celebrateReady = isSentence ? done && verbPlaced : done;
+  // 스텝 9·11은 입력된 내용이 없으면 매트 대신 안내를 보여준다.
+  const hasContentForCategory = boards.length > 0 || (!isMyInfo && step !== 9);
+
   // ─────────── 화면 ───────────
 
   if (screen === "home") {
@@ -735,7 +1013,7 @@ export default function ModuHangul() {
         </div>
 
         <div style={{ margin: "24px 16px 0", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          {[1, 2, 3, 4, 5, 6, 7, 8].map((s) => (
+          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((s) => (
             <button
               key={s}
               onClick={() => {
@@ -807,7 +1085,7 @@ export default function ModuHangul() {
                 <div style={{ fontSize: 15, fontWeight: 800, color: INK, marginBottom: 8 }}>{k.name}</div>
                 {!hasAny && <div style={{ fontSize: 13, color: "#9A938A" }}>아직 기록이 없어요.</div>}
                 {hasAny &&
-                  [1, 2, 3, 4, 5, 6, 7, 8]
+                  [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
                     .filter((s) => log[s])
                     .map((s) => (
                       <div key={s} style={{ display: "flex", justifyContent: "space-between", fontSize: 13.5, padding: "5px 0", borderTop: "1px solid #F1EDE6", color: INK }}>
@@ -827,14 +1105,21 @@ export default function ModuHangul() {
   return (
     <Shell>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px" }}>
-        <button onClick={() => { setScreen("home"); setShowSettings(false); }} style={chip(false)}>←</button>
+        <button
+          onClick={() => {
+            setScreen("home");
+            setShowSettings(false);
+            setShowWordManager(false);
+            setShowInfoManager(false);
+          }}
+          style={chip(false)}
+        >
+          ←
+        </button>
         <div style={{ fontSize: 13.5, fontWeight: 700, color: "#9A938A" }}>
           {childName} · 스텝 {step} {STEP_INFO[step].title}
         </div>
-        <button
-          onClick={() => setShowSettings((v) => !v)}
-          style={{ ...chip(false), opacity: 0.6 }}
-        >
+        <button onClick={() => setShowSettings((v) => !v)} style={{ ...chip(false), opacity: 0.6 }}>
           ⚙
         </button>
       </div>
@@ -882,6 +1167,19 @@ export default function ModuHangul() {
               </button>
             </div>
           )}
+          {isMyInfo && (
+            <div style={{ width: "100%", display: "flex", flexWrap: "wrap", gap: 8 }}>
+              <button onClick={openInfoManager} style={chip(false)}>정보 입력/수정</button>
+              <button
+                onClick={() => {
+                  if (confirm("저장된 개인정보를 모두 삭제할까요?")) clearMyInfo();
+                }}
+                style={chip(false)}
+              >
+                정보 전체 삭제
+              </button>
+            </div>
+          )}
           <button onClick={() => setSoundOn((v) => !v)} style={chip(soundOn)}>
             효과음 {soundOn ? "켬" : "끔"}
           </button>
@@ -891,8 +1189,8 @@ export default function ModuHangul() {
         </div>
       )}
 
-      {/* 그림상징 선택판 — 이 스텝에서 만들 수 있는 단어들 */}
-      {isMeaning && pool && (
+      {/* 그림상징 선택판 — 이 스텝에서 만들 수 있는 단어들 (스텝 5~10) */}
+      {(isMeaning || isSentence) && pool && (
         <div
           style={{
             display: "flex",
@@ -906,7 +1204,7 @@ export default function ModuHangul() {
             const selected = i === wordIdx % pool.length;
             return (
               <button
-                key={w.text}
+                key={w.text + i}
                 onClick={() => {
                   setWordIdx(i);
                   if (ttsOn) say(w.text);
@@ -931,61 +1229,164 @@ export default function ModuHangul() {
               </button>
             );
           })}
+          {step === 9 && (
+            <button
+              onClick={() => setShowWordManager(true)}
+              style={{
+                flexShrink: 0,
+                width: 56,
+                height: 56,
+                borderRadius: 14,
+                background: "#fff",
+                border: "1.5px dashed #C6C0B6",
+                fontSize: 26,
+                color: "#8B847A",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+              }}
+            >
+              +
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* 스텝 11: 항목 선택판 */}
+      {isMyInfo && (
+        <div style={{ display: "flex", gap: 8, overflowX: "auto", padding: "4px 14px 8px", WebkitOverflowScrolling: "touch" }}>
+          {MY_INFO_FIELDS.map((f) => {
+            const selected = infoCategory === f.key;
+            return (
+              <button
+                key={f.key}
+                onClick={() => {
+                  setInfoCategory(f.key);
+                  setPartIdx(0);
+                }}
+                style={{
+                  flexShrink: 0,
+                  minWidth: 64,
+                  height: 64,
+                  borderRadius: 14,
+                  background: "#fff",
+                  border: selected ? `3px solid ${MAT_RED}` : "1.5px solid #E2DDD4",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 2,
+                  cursor: "pointer",
+                  padding: "0 8px",
+                }}
+              >
+                <span style={{ fontSize: 22, lineHeight: 1 }}>{f.icon}</span>
+                <span style={{ fontSize: 10, fontWeight: 700, color: INK, whiteSpace: "nowrap" }}>{f.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {isMyInfo && wordInfo?.partsCount > 1 && (
+        <div style={{ textAlign: "center", fontSize: 12, color: "#9A938A", marginTop: -2 }}>
+          {(partIdx % wordInfo.partsCount) + 1} / {wordInfo.partsCount}
         </div>
       )}
 
       <div style={{ textAlign: "center", minHeight: 36 }}>
-        {done && <div style={{ fontSize: 24, fontWeight: 800, color: "#2E7D4F" }}>{doneText}</div>}
+        {celebrateReady && !isSentence && <div style={{ fontSize: 24, fontWeight: 800, color: "#2E7D4F" }}>{doneText}</div>}
       </div>
 
+      {isMyInfo && !hasContentForCategory && (
+        <div style={{ textAlign: "center", padding: "30px 20px" }}>
+          <div style={{ fontSize: 14, color: "#9A938A", marginBottom: 12 }}>아직 입력된 내용이 없어요.</div>
+          <button onClick={openInfoManager} style={{ ...chip(true), padding: "10px 20px" }}>정보 입력하기</button>
+        </div>
+      )}
+
+      {step === 9 && customWords.length === 0 && (
+        <div style={{ textAlign: "center", padding: "30px 20px" }}>
+          <div style={{ fontSize: 14, color: "#9A938A", marginBottom: 12 }}>아직 추가된 단어가 없어요.</div>
+          <button onClick={() => setShowWordManager(true)} style={{ ...chip(true), padding: "10px 20px" }}>단어 추가하기</button>
+        </div>
+      )}
+
       {/* 매트 */}
-      <div style={{ padding: "4px 12px 0" }}>
-        <div
-          style={{
-            border: `5px solid ${MAT_RED}`,
-            borderRadius: 26,
-            background: "#FDFBF6",
-            padding: "min(5vw, 26px) min(3vw, 18px)",
-            display: "flex",
-            justifyContent: "center",
-            alignItems: "center",
-            gap: "min(3.5vw, 20px)",
-            flexWrap: "wrap",
-          }}
-        >
-          {isMeaning && (
-            <div
-              style={{
-                width: "min(24vw, 110px)",
-                height: "min(24vw, 110px)",
-                background: "#fff",
-                borderRadius: 16,
-                border: "2px solid #E2DDD4",
-                boxShadow: "0 2px 8px rgba(46,42,37,0.10)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: "min(16vw, 72px)",
-                lineHeight: 1,
-                cursor: "pointer",
-              }}
-              onClick={() => ttsOn && say(wordInfo?.text ?? "")}
-              title="그림을 누르면 낱말을 읽어줘요"
-            >
-              {wordInfo?.emoji ?? ""}
+      {hasContentForCategory && (
+        <div style={{ padding: "4px 12px 0" }}>
+          <div
+            style={{
+              border: `5px solid ${MAT_RED}`,
+              borderRadius: 26,
+              background: "#FDFBF6",
+              padding: "min(5vw, 26px) min(3vw, 18px)",
+              display: "flex",
+              justifyContent: "center",
+              alignItems: "center",
+              gap: "min(3.5vw, 20px)",
+              flexWrap: "wrap",
+            }}
+          >
+            {(isMeaning || isSentence) && (
+              <div
+                style={{
+                  width: "min(24vw, 110px)",
+                  height: "min(24vw, 110px)",
+                  background: "#fff",
+                  borderRadius: 16,
+                  border: "2px solid #E2DDD4",
+                  boxShadow: "0 2px 8px rgba(46,42,37,0.10)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: "min(16vw, 72px)",
+                  lineHeight: 1,
+                  cursor: "pointer",
+                }}
+                onClick={() => ttsOn && say(wordInfo?.text ?? "")}
+                title="그림을 누르면 낱말을 읽어줘요"
+              >
+                {wordInfo?.emoji ?? ""}
+              </div>
+            )}
+            {boards.map((b, g) => renderBoard(b, g))}
+          </div>
+        </div>
+      )}
+
+      {/* 스텝 10: 문장 카드 자리 */}
+      {isSentence && done && (
+        <div style={{ textAlign: "center", margin: "10px 16px 0" }}>
+          {!verbPlaced ? (
+            <>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#8B847A", marginBottom: 8 }}>문장 카드를 골라 놓아주세요</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "center" }}>
+                {VERB_PHRASES.map((v, i) => (
+                  <button key={v} onClick={() => placeVerb(i)} style={{ ...chip(false), fontSize: 15, padding: "10px 16px" }}>
+                    {v}
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div style={{ fontSize: 22, fontWeight: 800, color: "#2E7D4F" }}>
+              {wordInfo?.text} {VERB_PHRASES[verbIdx]}
             </div>
           )}
-          {boards.map((b, g) => renderBoard(b, g))}
         </div>
-      </div>
+      )}
 
       <div style={{ flex: 1 }} />
 
-      {done && (
+      {celebrateReady && (
         <div style={{ textAlign: "center", marginBottom: 10 }}>
           <button
             onClick={() => {
-              if (isMeaning) setWordIdx((i) => i + 1);
+              if (isMyInfo) setPartIdx((i) => i + 1);
+              else if (isSentence) setWordIdx((i) => i + 1);
+              else if (isMeaning) setWordIdx((i) => i + 1);
               else setRound((r) => r + 1);
             }}
             style={{
@@ -1078,6 +1479,88 @@ export default function ModuHangul() {
             </div>
           );
         })()}
+
+      {/* 스텝 9: 단어 관리 모달 */}
+      {showWordManager && (
+        <div
+          style={{ position: "fixed", inset: 0, background: "rgba(46,42,37,0.4)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+          onClick={() => setShowWordManager(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: "#fff", borderRadius: 16, padding: 20, width: "min(92vw, 420px)", maxHeight: "80vh", overflowY: "auto" }}
+          >
+            <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 12, color: INK }}>단어 관리</div>
+            <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+              <input
+                value={newWordText}
+                onChange={(e) => setNewWordText(e.target.value)}
+                placeholder="단어 (예: 우유)"
+                style={{ flex: 1, border: "1.5px solid #E2DDD4", borderRadius: 10, padding: "9px 12px", fontSize: 14, color: INK }}
+              />
+              <input
+                value={newWordEmoji}
+                onChange={(e) => setNewWordEmoji(e.target.value)}
+                placeholder="이모지"
+                style={{ width: 64, border: "1.5px solid #E2DDD4", borderRadius: 10, padding: "9px 12px", fontSize: 18, textAlign: "center", color: INK }}
+              />
+            </div>
+            <button onClick={addCustomWord} style={{ ...chip(true), width: "100%", padding: "10px", marginBottom: 14 }}>
+              단어 추가
+            </button>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {customWords.length === 0 && <div style={{ fontSize: 13, color: "#9A938A" }}>아직 추가된 단어가 없어요.</div>}
+              {customWords.map((w, i) => (
+                <div key={w.text + i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", border: "1px solid #F1EDE6", borderRadius: 10 }}>
+                  <span style={{ fontSize: 20 }}>{w.emoji || "📝"}</span>
+                  <span style={{ flex: 1, fontWeight: 700, color: INK }}>{w.text}</span>
+                  <button onClick={() => removeCustomWord(i)} style={{ ...chip(false), padding: "4px 10px" }}>
+                    삭제
+                  </button>
+                </div>
+              ))}
+            </div>
+            <button onClick={() => setShowWordManager(false)} style={{ ...chip(true), width: "100%", padding: "10px", marginTop: 14 }}>
+              닫기
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 스텝 11: 정보 입력 모달 (기기 내 저장만, 외부 전송 없음) */}
+      {showInfoManager && (
+        <div
+          style={{ position: "fixed", inset: 0, background: "rgba(46,42,37,0.4)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+          onClick={() => setShowInfoManager(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: "#fff", borderRadius: 16, padding: 20, width: "min(92vw, 420px)", maxHeight: "80vh", overflowY: "auto" }}
+          >
+            <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 4, color: INK }}>나의 정보 입력</div>
+            <div style={{ fontSize: 12, color: "#9A938A", marginBottom: 14 }}>이 정보는 이 기기에만 저장되고 외부로 전송되지 않아요.</div>
+            {MY_INFO_FIELDS.map((f) => (
+              <div key={f.key} style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#8B847A", marginBottom: 4 }}>
+                  {f.icon} {f.label}
+                </div>
+                <input
+                  value={infoForm[f.key]}
+                  onChange={(e) => setInfoForm((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                  placeholder={f.key === "phone" ? "예: 010-1234-5678" : f.key === "address" ? "예: 서울시 강남구" : "예: 홍길동"}
+                  style={{ width: "100%", border: "1.5px solid #E2DDD4", borderRadius: 10, padding: "9px 12px", fontSize: 14, color: INK, boxSizing: "border-box" }}
+                />
+              </div>
+            ))}
+            <button onClick={saveInfoForm} style={{ ...chip(true), width: "100%", padding: "10px", marginTop: 8 }}>
+              저장
+            </button>
+            <button onClick={() => setShowInfoManager(false)} style={{ ...chip(false), width: "100%", padding: "10px", marginTop: 8 }}>
+              취소
+            </button>
+          </div>
+        </div>
+      )}
     </Shell>
   );
 }
