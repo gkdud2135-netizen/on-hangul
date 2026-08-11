@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 
 // ─────────────────────────────────────────────
-// 모두의 한글 v11
+// 온의 언어 : 한글 v11
 // + 의미낱말 2~5음절 확장 (스텝 5: 1음절 / 6: 2음절 / 7: 3음절 / 8: 4~5음절)
 // + 이중모음(ㅘ 등)은 ㅗ·ㅏ 위치를 나눠 노랑 칸 2개로 표시
 // + 의미낱말 스텝: 그림상징 선택판 — 상징을 눌러 쓸 단어를 고름
@@ -625,7 +625,7 @@ export default function ModuHangul() {
       <Shell>
         <div style={{ textAlign: "center", paddingTop: 36 }}>
           <div style={{ fontSize: 15, fontWeight: 700, color: MAT_RED, letterSpacing: "0.16em" }}>온 의사소통 연구소</div>
-          <h1 style={{ fontSize: 40, fontWeight: 900, margin: "6px 0 2px", color: INK }}>모두의 한글</h1>
+          <h1 style={{ fontSize: 40, fontWeight: 900, margin: "6px 0 2px", color: INK }}>온의 언어 : 한글</h1>
           <div style={{ fontSize: 14, color: "#8B847A" }}>엘코닌 박스로 배우는 한글 첫걸음</div>
         </div>
 
