@@ -267,6 +267,28 @@ export default function ModuHangul() {
     speak("안녕하세요", VOICE_PROFILES[v]);
   };
 
+  const showVoiceDebug = () => {
+    const synth = window.speechSynthesis;
+    if (!synth) {
+      alert("이 브라우저는 음성 합성을 지원하지 않아요.");
+      return;
+    }
+    const kos = synth.getVoices().filter((v) => v.lang && v.lang.startsWith("ko"));
+    const maleV = pickKoVoice("male");
+    const femaleV = pickKoVoice("female");
+    const list = kos.length
+      ? kos.map((v) => `- ${v.name} (${v.lang})${v.localService ? "" : " [온라인 음성]"}`).join("\n")
+      : "(설치된 한국어 음성이 없어요)";
+    const same = maleV && femaleV && maleV.name === femaleV.name;
+    const msg =
+      `설치된 한국어 음성: ${kos.length}개\n${list}\n\n` +
+      `남자 프로필이 쓰는 음성: ${maleV?.name ?? "없음"}\n` +
+      `여자 프로필이 쓰는 음성: ${femaleV?.name ?? "없음"}\n` +
+      (same ? "→ 같은 음성 + 음높이만 다르게 적용 중" : "→ 서로 다른 음성을 사용 중");
+    console.log(msg);
+    alert(msg);
+  };
+
   useEffect(() => {
     setData(loadData());
     // iOS는 speechSynthesis 음성 목록을 비동기로 늦게 채우는 경우가 많아 미리 깨워둔다.
@@ -855,6 +877,9 @@ export default function ModuHangul() {
                   {p.label}
                 </button>
               ))}
+              <button onClick={showVoiceDebug} style={{ ...chip(false), marginLeft: "auto" }}>
+                설치된 음성 확인
+              </button>
             </div>
           )}
           <button onClick={() => setSoundOn((v) => !v)} style={chip(soundOn)}>
