@@ -34,11 +34,14 @@ function jamoSoundByRegion(jamo, region) {
   return JUNG_SOUND[jamo] ?? "";
 }
 
+// iOS/Safari의 speechSynthesis는 pitch 조절 폭이 좁게 반영되는 경우가 많아
+// 프로필 간 차이를 크게 벌려두고, 기기에 한국어 음성이 여러 개 있으면
+// 성별에 따라 실제로 다른 음성을 선택한다.
 const VOICE_PROFILES = {
-  adultFemale: { label: "여자 성인", pitch: 1.05, rate: 0.85 },
-  adultMale: { label: "남자 성인", pitch: 0.7, rate: 0.85 },
-  girl: { label: "여자아이", pitch: 1.55, rate: 0.95 },
-  boy: { label: "남자아이", pitch: 1.3, rate: 0.95 },
+  adultFemale: { label: "여자 성인", pitch: 1.15, rate: 0.85, gender: "female" },
+  adultMale: { label: "남자 성인", pitch: 0.35, rate: 0.8, gender: "male" },
+  girl: { label: "여자아이", pitch: 2, rate: 1.05, gender: "female" },
+  boy: { label: "남자아이", pitch: 1.7, rate: 1.05, gender: "male" },
 };
 const VOICE_STORAGE_KEY = "mh-voice";
 
@@ -55,7 +58,27 @@ function saveVoiceProfile(v) {
   } catch (e) {}
 }
 
-function speak(text, { rate = 0.85, pitch = 1 } = {}) {
+const MALE_VOICE_HINTS = ["male", "man", "민준", "진호", "현우", "준서", "우진", "도윤"];
+const FEMALE_VOICE_HINTS = ["female", "woman", "유나", "지민", "서연", "수아", "yuna"];
+
+function pickKoVoice(gender) {
+  try {
+    const synth = window.speechSynthesis;
+    if (!synth) return null;
+    const kos = synth.getVoices().filter((v) => v.lang && v.lang.startsWith("ko"));
+    if (kos.length === 0) return null;
+    if (kos.length === 1) return kos[0];
+    const hints = gender === "male" ? MALE_VOICE_HINTS : FEMALE_VOICE_HINTS;
+    const named = kos.find((v) => hints.some((h) => v.name.toLowerCase().includes(h.toLowerCase())));
+    if (named) return named;
+    // 이름으로 구분이 안 되면 성별별로 서로 다른 음성이라도 쓰도록 순서로 나눔
+    return gender === "male" ? kos[kos.length - 1] : kos[0];
+  } catch (e) {
+    return null;
+  }
+}
+
+function speak(text, { rate = 0.85, pitch = 1, gender = "female" } = {}) {
   if (!text) return;
   try {
     const synth = window.speechSynthesis;
@@ -65,9 +88,8 @@ function speak(text, { rate = 0.85, pitch = 1 } = {}) {
     u.lang = "ko-KR";
     u.rate = rate;
     u.pitch = pitch;
-    const voices = synth.getVoices();
-    const ko = voices.find((v) => v.lang && v.lang.startsWith("ko"));
-    if (ko) u.voice = ko;
+    const voice = pickKoVoice(gender);
+    if (voice) u.voice = voice;
     synth.speak(u);
   } catch (e) {}
 }
@@ -247,6 +269,11 @@ export default function ModuHangul() {
 
   useEffect(() => {
     setData(loadData());
+    // iOS는 speechSynthesis 음성 목록을 비동기로 늦게 채우는 경우가 많아 미리 깨워둔다.
+    try {
+      window.speechSynthesis?.getVoices();
+      window.speechSynthesis?.addEventListener("voiceschanged", () => window.speechSynthesis.getVoices());
+    } catch (e) {}
   }, []);
 
   const hasJamo = step >= 3;
