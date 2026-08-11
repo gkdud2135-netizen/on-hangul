@@ -89,30 +89,48 @@ function makeUtterance(text, { rate = 0.85, pitch = 1, gender = "female" } = {})
   return u;
 }
 
+// speechSynthesis.cancel()은 취소된 발화에도 onend를 발생시킨다.
+// 세대 토큰 없이 onend에서 다음 항목을 재생하면, 이전 시퀀스의 잔여 음절이
+// 새 발화 뒤에 끼어들어 실제로 놓은 자모와 다른 글자가 들린다.
+let speechGen = 0;
+
 function speak(text, opts) {
   if (!text) return;
   try {
     const synth = window.speechSynthesis;
     if (!synth) return;
+    speechGen++; // 진행 중인 시퀀스 무효화
     synth.cancel();
     synth.speak(makeUtterance(text, opts));
   } catch (e) {}
 }
 
+// 새 문제로 넘어갈 때 이전 발화가 이어지지 않도록 끊는다.
+function stopSpeech() {
+  try {
+    speechGen++;
+    window.speechSynthesis?.cancel();
+  } catch (e) {}
+}
+
 // 자모 음가 → 음절 → (단어) 를 짧은 간격을 두고 순서대로 읽는다.
-function speakSequence(texts, opts, gapMs = 150) {
+function speakSequence(texts, opts, gapMs = 160) {
   const list = (texts || []).filter(Boolean);
   if (!list.length) return;
   try {
     const synth = window.speechSynthesis;
     if (!synth) return;
+    const myGen = ++speechGen;
     synth.cancel();
     let i = 0;
     const playNext = () => {
-      if (i >= list.length) return;
+      if (myGen !== speechGen || i >= list.length) return;
       const u = makeUtterance(list[i++], opts);
-      u.onend = () => setTimeout(playNext, gapMs);
-      u.onerror = () => setTimeout(playNext, gapMs);
+      const advance = () => {
+        if (myGen === speechGen) setTimeout(playNext, gapMs);
+      };
+      u.onend = advance;
+      u.onerror = advance;
       synth.speak(u);
     };
     playNext();
@@ -165,7 +183,15 @@ const WORDS_45 = [
 ];
 const MEANING_POOLS = { 5: WORDS_1, 6: WORDS_2, 7: WORDS_3, 8: WORDS_45 };
 
-const VERB_PHRASES = ["주세요", "원해요", "먹고 싶어요", "가고 싶어요", "하고 싶어요", "해요"];
+// 무발화 학습자는 글자보다 상징으로 먼저 인식하므로 동사구에도 그림상징을 붙인다.
+const VERB_PHRASES = [
+  { text: "주세요", emoji: "🙏" },
+  { text: "원해요", emoji: "🙋" },
+  { text: "먹고 싶어요", emoji: "🍽️" },
+  { text: "가고 싶어요", emoji: "🚶" },
+  { text: "하고 싶어요", emoji: "💪" },
+  { text: "해요", emoji: "✅" },
+];
 
 const DIGIT_SOUND = { "0": "공", "1": "일", "2": "이", "3": "삼", "4": "사", "5": "오", "6": "육", "7": "칠", "8": "팔", "9": "구" };
 
@@ -522,6 +548,7 @@ export default function ModuHangul() {
         };
       }
     }
+    stopSpeech();
     setBoards(bs);
     setWordInfo(word);
     setCards(shuffle(all));
@@ -624,7 +651,7 @@ export default function ModuHangul() {
     if (!done || verbPlaced) return;
     setVerbIdx(idx);
     setVerbPlaced(true);
-    const sentence = `${wordInfo?.text ?? ""} ${VERB_PHRASES[idx]}`;
+    const sentence = `${wordInfo?.text ?? ""} ${VERB_PHRASES[idx].text}`;
     if (ttsOn) say(sentence);
     if (soundOn) playChord();
   };
@@ -1362,17 +1389,37 @@ export default function ModuHangul() {
           {!verbPlaced ? (
             <>
               <div style={{ fontSize: 13, fontWeight: 700, color: "#8B847A", marginBottom: 8 }}>문장 카드를 골라 놓아주세요</div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "center" }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "center" }}>
                 {VERB_PHRASES.map((v, i) => (
-                  <button key={v} onClick={() => placeVerb(i)} style={{ ...chip(false), fontSize: 15, padding: "10px 16px" }}>
-                    {v}
+                  <button
+                    key={v.text}
+                    onClick={() => placeVerb(i)}
+                    style={{
+                      border: "1.5px solid #E2DDD4",
+                      background: "#fff",
+                      borderRadius: 16,
+                      padding: "10px 14px",
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      gap: 4,
+                      cursor: "pointer",
+                      minWidth: 88,
+                      boxShadow: "0 2px 6px rgba(46,42,37,0.10)",
+                    }}
+                  >
+                    <span style={{ fontSize: 34, lineHeight: 1 }}>{v.emoji}</span>
+                    <span style={{ fontSize: 15, fontWeight: 700, color: INK, whiteSpace: "nowrap" }}>{v.text}</span>
                   </button>
                 ))}
               </div>
             </>
           ) : (
-            <div style={{ fontSize: 22, fontWeight: 800, color: "#2E7D4F" }}>
-              {wordInfo?.text} {VERB_PHRASES[verbIdx]}
+            <div style={{ fontSize: 22, fontWeight: 800, color: "#2E7D4F", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>
+              <span>{wordInfo?.emoji}</span>
+              <span>{wordInfo?.text}</span>
+              <span>{VERB_PHRASES[verbIdx].emoji}</span>
+              <span>{VERB_PHRASES[verbIdx].text}</span>
             </div>
           )}
         </div>
