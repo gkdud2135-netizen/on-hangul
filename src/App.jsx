@@ -35,23 +35,22 @@ function jamoSoundByRegion(jamo, region) {
   return JUNG_SOUND[jamo] ?? "";
 }
 
-// iOS/Safari의 speechSynthesis는 pitch 조절 폭이 좁게 반영되는 경우가 많아
-// 프로필 간 차이를 크게 벌려두고, 기기에 한국어 음성이 여러 개 있으면
-// 성별에 따라 실제로 다른 음성을 선택한다.
+// iOS는 pitch를 지정하면 음성이 합성적으로 바뀌면서 원래의 낮은 음색이 사라진다.
+// 남자 목소리는 pitch를 아예 지정하지 않아 기기 기본 저음을 그대로 쓴다(초기 버전과 동일).
 const VOICE_PROFILES = {
-  adultFemale: { label: "여자 성인", pitch: 1.15, rate: 0.85, gender: "female" },
-  adultMale: { label: "남자 성인", pitch: 0.35, rate: 0.8, gender: "male" },
-  girl: { label: "여자아이", pitch: 2, rate: 1.05, gender: "female" },
-  boy: { label: "남자아이", pitch: 1.7, rate: 1.05, gender: "male" },
+  female: { label: "여자 목소리", pitch: 1.15, rate: 0.85, gender: "female" },
+  male: { label: "남자 목소리", rate: 0.8, gender: "male" },
 };
 const VOICE_STORAGE_KEY = "mh-voice";
+const LEGACY_VOICE_MAP = { adultFemale: "female", girl: "female", adultMale: "male", boy: "male" };
 
 function loadVoiceProfile() {
   try {
     const v = window.localStorage.getItem(VOICE_STORAGE_KEY);
     if (v && VOICE_PROFILES[v]) return v;
+    if (v && LEGACY_VOICE_MAP[v]) return LEGACY_VOICE_MAP[v];
   } catch (e) {}
-  return "adultFemale";
+  return "female";
 }
 function saveVoiceProfile(v) {
   try {
@@ -79,11 +78,12 @@ function pickKoVoice(gender) {
   }
 }
 
-function makeUtterance(text, { rate = 0.85, pitch = 1, gender = "female" } = {}) {
+function makeUtterance(text, { rate = 0.85, pitch, gender = "female" } = {}) {
   const u = new SpeechSynthesisUtterance(text);
   u.lang = "ko-KR";
   u.rate = rate;
-  u.pitch = pitch;
+  // pitch를 지정하지 않으면 기기 기본 음색(저음)이 그대로 유지된다.
+  if (pitch !== undefined) u.pitch = pitch;
   const voice = pickKoVoice(gender);
   if (voice) u.voice = voice;
   return u;
